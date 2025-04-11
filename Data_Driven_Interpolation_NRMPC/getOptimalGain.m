@@ -1,0 +1,104 @@
+function [K, nosolution_flag, Q, gamma, P_Static, mu] = getOptimalGain(x, A, B, d)
+    nx = size(B{1}, 1);
+    nu = size(B{1}, 2);
+    Q1 = 1000 * diag([ones(2, 1);  zeros(nx - 2, 1)]) ;
+    R = 0.01;
+%     Q1 = 10 * [eye(3, 3) zeros(3, 3);
+%                zeros(3, 3) zeros(3, 3)];
+%     R = 0.001 * eye(nu);
+    Nd = size(A, 2);
+    gamma = sdpvar(1, 1);
+    X = sdpvar(nu, nu);
+    Q = sdpvar(nx, nx);
+    Y = sdpvar(nu, nx);
+    mu = sdpvar(Nd, 1);
+%     d = rand(nx, Nd);
+    
+    nosolution_flag = 0;
+    LMI1 = [1 x';
+            x Q];
+    
+    for j = 1 : Nd
+        LMI2{j} = [Q                       (A{j} * Q + B{j} * Y)'    (sqrt(Q1)*Q)'       (sqrt(R)*Y)'
+                   A{j} * Q + B{j} * Y          Q                    zeros(nx, nx)       zeros(nx, nu);
+                   sqrt(Q1)*Q              zeros(nx, nx)        (gamma) * eye(nx, nx) zeros(nx, nu);
+                   sqrt(R)*Y               zeros(nu, nx)        zeros(nu, nx)       (gamma) * eye(nu, nu)];
+        LMI_Maximum_Invariance{j} = [1 mu(j) * d(:, j)';
+                                  mu(j) * d(:, j) Q];
+    end
+    
+    LMI0 = [X  Y;
+            Y' Q];
+    
+    ZEROS = 0;
+%     Constraints = [LMI0 >= ZEROS, LMI1 >= ZEROS, Q >= ZEROS];    
+%     Constraints = [LMI0 >= ZEROS, Q >= ZEROS];    
+    Constraints = [LMI1 >= ZEROS, Q >= 0];
+
+    for j = 1 : Nd
+        Constraints = [Constraints, LMI2{j} >= 0 , LMI_Maximum_Invariance{j} >= 0];
+    end
+    
+% %     Input constraints  |uk| <= 2
+%     Control_Bound = 10;
+%     for j = 1 : nu
+%         Constraints = [Constraints X(j, j) <= Control_Bound^2 ] ;
+%     end
+
+
+    Control_Bound = 4;
+    State_Bound = 2;
+
+
+    F_x = [-eye(nx, nx);
+       eye(nx, nx)];
+
+    G_x = [State_Bound;
+           State_Bound;
+           State_Bound;
+           State_Bound
+           State_Bound;
+           State_Bound];
+
+    F_u = [-eye(nu, nu);
+           eye(nu, nu)]; 
+    G_u = [Control_Bound;
+           Control_Bound];
+
+    cx = size(F_x, 1);
+    cu = size(F_u, 1);
+
+    Z = sdpvar(cx, cx);
+    G = sdpvar(cu, cu);
+
+    LMI_Constraints_x = [Z F_x * Q;
+                        (F_x * Q)' Q];
+    LMI_Constraints_u = [G F_u * Y;
+                        (F_u * Y)' Q];
+    Constraints = [Constraints;
+                   LMI_Constraints_x >= 0;
+                   LMI_Constraints_u >= 0];
+    for k = 1 : cx
+        Constraints = [Constraints; 
+                       Z(k, k) <= G_x(k)^2;];
+    end
+
+    for k = 1 : cu
+        Constraints = [Constraints; 
+                       G(k, k) <= G_u(k)^2;];
+    end
+
+    Objective = gamma;
+    
+    sol  = optimize(Constraints, Objective);
+    if sol.problem ~= 0
+        nosolution_flag = 1;
+    end
+    Y = double(Y);
+    Q = double(Q);
+    mu = double(mu);
+    gamma = double(gamma);
+    P_Static = double(gamma * inv(Q));
+    K = Y / Q;
+end
+
